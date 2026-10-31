@@ -4,7 +4,7 @@ A web-based patient monitor for ACLS training. One device (laptop, TV, tablet) s
 monitor; the instructor's phone controls the ECG rhythm and vital signs live. Nothing to
 install: open the link on both devices and pair with a 6-digit code.
 
-**Live app:** https://icalitulaci.github.io/ecg-acls-simulator/ (after GitHub Pages is enabled, see below)
+**Live app:** https://icalitulaci.github.io/ecg-acls-simulator/
 
 > Training tool only. Not a medical device.
 
@@ -52,13 +52,11 @@ with capnography waveform, respiratory rate and temperature.
 **Monitor realism:** sweeping traces, a QRS beep whose pitch drops as SpO₂ falls, and
 prioritised alarms (banner, flashing values, tones).
 
-## Turning on the link (GitHub Pages)
+## Hosting (GitHub Pages)
 
-1. On GitHub open **Settings → Pages**.
-2. Under **Build and deployment** pick **Source: Deploy from a branch**.
-3. Choose the branch with this code (for example `main` after merging) and the **/ (root)**
-   folder, then **Save**.
-4. After about a minute the app is live at `https://icalitulaci.github.io/ecg-acls-simulator/`.
+The site is published by GitHub Pages from the `gh-pages` branch. Anything pushed to that
+branch goes live at https://icalitulaci.github.io/ecg-acls-simulator/ within about a minute.
+To publish from another branch instead, change it under **Settings → Pages**.
 
 ## How pairing works
 
