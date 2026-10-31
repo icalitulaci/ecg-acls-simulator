@@ -1,9 +1,10 @@
 // Entry point: home screen + routing between monitor and controller.
 //   ?monitor        → this device is the patient monitor
 //   ?join=123456    → this device is the controller for that code (?join alone asks for it)
+//   ?solo           → monitor + controls on this device, with the rhythm quiz
 import { MonitorAudio } from './audio.js';
 import { startMonitor, forgetMonitorCode } from './monitor-page.js';
-import { startHost, renderConnect } from './host-page.js';
+import { startHost, startSolo, renderConnect } from './host-page.js';
 import { icon } from './util.js';
 
 const root = document.getElementById('app');
@@ -51,12 +52,17 @@ function renderHome() {
           <span class="role-icon">${icon('phone')}</span>
           <span class="role-text"><b>Controller</b><small>For the instructor: change the rhythm and vitals on the paired monitor.</small></span>
         </button>
+        <button type="button" class="role" data-role="solo">
+          <span class="role-icon">${icon('solo')}</span>
+          <span class="role-text"><b>Solo practice</b><small>Monitor and controls on one device, no pairing. Includes a rhythm quiz.</small></span>
+        </button>
       </div>
       <ol class="how">
         <li><b>Open this page on the monitor screen</b> and tap <em>Monitor</em>. A 6-digit pairing code appears.</li>
         <li><b>On your phone</b>, scan the QR code, or open this page, tap <em>Controller</em> and type the code.</li>
         <li><b>Pick a rhythm, adjust vitals or run a scenario.</b> The monitor updates instantly.</li>
       </ol>
+      <p class="how-solo">Practising on your own? Tap <em>Solo practice</em> to use the monitor without pairing and to quiz yourself on rhythms.</p>
       <p class="fine">For training only. Not a medical device. Pairing goes through free public relay servers, so don't enter any patient information.</p>
     </main>`;
   root.querySelector('[data-role="monitor"]').addEventListener('click', () => {
@@ -65,12 +71,20 @@ function renderHome() {
     navigate({ monitor: '' });
   });
   root.querySelector('[data-role="host"]').addEventListener('click', () => navigate({ join: '' }));
+  root.querySelector('[data-role="solo"]').addEventListener('click', () => {
+    audio.unlock();
+    navigate({ solo: '' });
+  });
 }
 
 function route() {
   const q = new URLSearchParams(location.search);
   if (q.has('monitor')) {
     show('monitor', () => startMonitor(root, { audio, onExit: () => navigate({}) }));
+    return;
+  }
+  if (q.has('solo')) {
+    show('solo', () => startSolo(root, { audio, onExit: () => navigate({}) }));
     return;
   }
   if (q.has('join')) {

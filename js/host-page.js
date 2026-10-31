@@ -3,7 +3,8 @@ import { Link } from './link.js';
 import { MonitorView } from './monitor-view.js';
 import { RHYTHMS, RHYTHM_MAP, GROUPS, ECTOPY, defaultPulse } from './rhythms.js';
 import { defaultState, sanitize, cloneState, diffCount, PRESETS, applyPreset, TRENDS, NUM_KEYS } from './state.js';
-import { fmtCode, load, store, icon } from './util.js';
+import { fmtCode, load, store, icon, requestFullscreen, exitFullscreen, fullscreenElement } from './util.js';
+import { startQuiz, quizCounts, resetQuiz } from './quiz.js';
 
 const AUTOSEND_KEY = 'acls-monsim.autosend';
 
@@ -90,8 +91,7 @@ function vitalRowHtml(r) {
     </div>`;
 }
 
-const HOST_TEMPLATE = `
-  <div class="host">
+const HOST_HEADER = `
     <header class="host-bar">
       <button type="button" class="icon-btn" data-act="exit" aria-label="Disconnect">${icon('back')}</button>
       <div class="host-title">
@@ -103,14 +103,47 @@ const HOST_TEMPLATE = `
         <div class="conn-line conn-mon"><span class="dot"></span><span class="txt">Waiting for monitor…</span></div>
       </div>
     </header>
-    <div class="conn-hint" role="status" hidden></div>
-    <div class="host-grid">
-      <div class="col">
+    <div class="conn-hint" role="status" hidden></div>`;
+
+const SOLO_HEADER = `
+    <header class="host-bar">
+      <button type="button" class="icon-btn" data-act="exit" aria-label="Back to start">${icon('back')}</button>
+      <div class="host-title">
+        <div class="host-name">Solo practice</div>
+        <div class="host-code">This device only, no pairing</div>
+      </div>
+      <button type="button" class="btn primary quiz-btn" data-act="quiz">${icon('cards')} Quiz</button>
+    </header>`;
+
+const HOST_PREVIEW = `
         <section class="card preview-card">
           <div class="card-head"><h2>Live monitor</h2><span class="card-tags"><span class="trend-tag" hidden></span><span class="live-tag">LIVE</span></span></div>
           <div class="preview"></div>
           <div class="preview-rhythm"></div>
+        </section>`;
+
+// Solo: no rhythm name under the monitor, so it can be used for practice.
+const SOLO_PREVIEW = `
+        <section class="card preview-card">
+          <div class="card-head"><h2>Monitor</h2><span class="card-tags"><span class="trend-tag" hidden></span><button type="button" class="pill action" data-act="full">${icon('fullscreen')} Full screen</button></span></div>
+          <div class="solo-stage"><div class="preview"></div></div>
         </section>
+        <section class="card quiz-card">
+          <div class="card-head"><h2>Rhythm quiz</h2><small class="muted">Flashcards, Anki-style</small></div>
+          <p class="quiz-intro">A random rhythm fills the screen with no labels. Name it, reveal the answer, then rate yourself. Rhythms you miss come back sooner.</p>
+          <div class="quiz-stats"><span><b class="qs-new"></b> new</span><span><b class="qs-learn"></b> learning</span><span><b class="qs-due"></b> due</span></div>
+          <div class="quiz-actions">
+            <button type="button" class="btn primary big" data-act="quiz">Start quiz</button>
+            <button type="button" class="link-btn" data-act="quiz-reset">Reset progress</button>
+          </div>
+        </section>`;
+
+const controllerTemplate = (solo) => `
+  <div class="host${solo ? ' solo' : ''}">
+    ${solo ? SOLO_HEADER : HOST_HEADER}
+    <div class="host-grid">
+      <div class="col">
+        ${solo ? SOLO_PREVIEW : HOST_PREVIEW}
         <section class="card">
           <div class="card-head"><h2>Rhythm</h2></div>
           <div class="rhythm-current"></div>
@@ -139,7 +172,7 @@ const HOST_TEMPLATE = `
         </section>
         <section class="card">
           <div class="card-head"><h2>Settings</h2></div>
-          <label class="switch-row"><span><b>Live updates</b><small>Off: prepare changes first, then tap Send</small></span><input type="checkbox" class="sw autosend"></label>
+          <label class="switch-row"><span><b>Live updates</b><small>Off: prepare changes first, then tap ${solo ? 'Apply' : 'Send'}</small></span><input type="checkbox" class="sw autosend"></label>
           <label class="switch-row"><span><b>QRS beep</b><small>Pitch drops as SpO₂ falls</small></span><input type="checkbox" class="sw beep"></label>
           <label class="switch-row"><span><b>Alarm sounds</b></span><input type="checkbox" class="sw alarmsnd"></label>
           <label class="switch-row"><span><b>Alarms</b><small>Banner, flashing numbers and tones</small></span><input type="checkbox" class="sw alarms"></label>
@@ -150,15 +183,23 @@ const HOST_TEMPLATE = `
     <div class="send-bar" hidden>
       <span class="send-count"></span>
       <button type="button" class="btn ghost" data-act="discard">Discard</button>
-      <button type="button" class="btn primary" data-act="send">Send to monitor</button>
+      <button type="button" class="btn primary" data-act="send">${solo ? 'Apply' : 'Send to monitor'}</button>
     </div>
   </div>`;
 
-export function startHost(root, code, { onExit }) {
-  root.innerHTML = HOST_TEMPLATE;
+export function startHost(root, code, opts) {
+  return startController(root, { ...opts, code });
+}
+
+export function startSolo(root, opts) {
+  return startController(root, { ...opts, solo: true });
+}
+
+function startController(root, { code = '', solo = false, audio = null, onExit }) {
+  root.innerHTML = controllerTemplate(solo);
   const $ = (s) => root.querySelector(s);
   const $$ = (s) => [...root.querySelectorAll(s)];
-  $('.host-code b').textContent = fmtCode(code);
+  if (!solo) $('.host-code b').textContent = fmtCode(code);
 
   let live = defaultState(); // what the monitor shows (last sent / adopted)
   let draft = cloneState(live); // what the controls show
@@ -170,21 +211,22 @@ export function startHost(root, code, { onExit }) {
   const connectedAt = Date.now();
   const monitors = new Map();
 
-  const preview = new MonitorView($('.preview'), { compact: true });
+  // In solo mode this device is the monitor too, so it plays the sounds.
+  const preview = new MonitorView($('.preview'), { compact: true, audio: solo ? audio : null });
   preview.applyState(cloneState(live));
 
-  const link = new Link(code, { onMessage, onStatus: renderConn, onConnect: () => ping() });
-  link.subscribe('state');
-  link.subscribe('mon');
-  const ping = () => link.publish('host', { id: link.id, rev: live.rev });
-  const pingTimer = setInterval(ping, 3000);
+  const link = solo ? null : new Link(code, { onMessage, onStatus: renderConn, onConnect: () => ping() });
+  link?.subscribe('state');
+  link?.subscribe('mon');
+  const ping = () => link?.publish('host', { id: link.id, rev: live.rev });
+  const pingTimer = solo ? null : setInterval(ping, 3000);
 
   // ---- sync logic
 
   const nextRev = () => (maxRev = Math.max(Date.now(), maxRev + 1));
 
   function publish() {
-    link.publish('state', live, true);
+    link?.publish('state', live, true);
     preview.applyState(cloneState(live));
     renderAll();
   }
@@ -426,7 +468,14 @@ export function startHost(root, code, { onExit }) {
   root.querySelector('.host').addEventListener('click', (e) => {
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (act === 'exit') onExit();
-    else if (act === 'send') commit();
+    else if (act === 'quiz') openQuiz();
+    else if (act === 'full') enterFull();
+    else if (act === 'quiz-reset') {
+      if (confirm('Reset all quiz progress on this device?')) {
+        resetQuiz();
+        renderQuizStats();
+      }
+    } else if (act === 'send') commit();
     else if (act === 'discard') {
       draft = cloneState(live);
       renderAll();
@@ -512,12 +561,25 @@ export function startHost(root, code, { onExit }) {
     $('.send-count').textContent = `${n} change${n === 1 ? '' : 's'} ready`;
     root.querySelector('.host').classList.toggle('has-send-bar', !autoSend && n > 0);
 
-    const LR = RHYTHM_MAP[live.rhythm];
-    $('.preview-rhythm').textContent = `${LR.name}${LR.hr ? ` · ${live.hr} bpm` : ''} · ${live.pulse ? 'pulse' : 'no pulse'}`;
+    if (!solo) {
+      const LR = RHYTHM_MAP[live.rhythm];
+      $('.preview-rhythm').textContent = `${LR.name}${LR.hr ? ` · ${live.hr} bpm` : ''} · ${live.pulse ? 'pulse' : 'no pulse'}`;
+    }
     renderConn();
   }
 
+  function renderTrend(now) {
+    const tag = $('.trend-tag');
+    const left = Math.ceil((trendEnd - now) / 1000);
+    tag.hidden = !(left > 0);
+    if (left > 0) tag.textContent = `Trending ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+  }
+
   function renderConn() {
+    if (solo) {
+      renderTrend(Date.now());
+      return;
+    }
     const { up } = link.status();
     const relay = $('.conn-line.conn-relay');
     const now = Date.now();
@@ -549,29 +611,97 @@ export function startHost(root, code, { onExit }) {
     }
     hint.hidden = !msg;
     if (hint.textContent !== msg) hint.textContent = msg;
-
-    const tag = $('.trend-tag');
-    const left = Math.ceil((trendEnd - now) / 1000);
-    tag.hidden = !(left > 0);
-    if (left > 0) tag.textContent = `Trending ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    renderTrend(now);
   }
   const connTimer = setInterval(() => {
     // A waiting monitor and no state found on the relay: start it with the current state.
     const now = Date.now();
-    if (live.rev === 0 && now - connectedAt > 1500 && [...monitors.values()].some((m) => m.rev === 0 && now - m.seen < 8000)) {
+    if (!solo && live.rev === 0 && now - connectedAt > 1500 && [...monitors.values()].some((m) => m.rev === 0 && now - m.seen < 8000)) {
       live.rev = draft.rev = nextRev();
       publish();
     }
     renderConn();
   }, 1000);
 
+  // ---- solo: full-screen monitor and quiz
+
+  const stage = $('.solo-stage');
+  let closeQuiz = null;
+  let wentNative = false;
+
+  function enterFull() {
+    if (!stage) return;
+    audio?.unlock();
+    stage.classList.add('is-full');
+    document.body.classList.add('quiz-open');
+    preview.setCompact(false);
+    wentNative = false;
+    requestFullscreen(stage);
+  }
+
+  function exitFull() {
+    if (!stage?.classList.contains('is-full')) return;
+    stage.classList.remove('is-full');
+    document.body.classList.remove('quiz-open');
+    preview.setCompact(true);
+    if (fullscreenElement() === stage) exitFullscreen();
+  }
+
+  const onFsChange = () => {
+    if (!stage) return;
+    if (fullscreenElement() === stage) wentNative = true;
+    else if (wentNative) exitFull(); // left browser fullscreen with Esc / system gesture
+  };
+  const onKeyFull = (e) => {
+    if (e.key === 'Escape' && stage?.classList.contains('is-full') && !fullscreenElement()) exitFull();
+  };
+
+  function renderQuizStats() {
+    if (!solo) return;
+    const c = quizCounts();
+    $('.qs-new').textContent = c.fresh;
+    $('.qs-learn').textContent = c.learning;
+    $('.qs-due').textContent = c.due;
+  }
+
+  function openQuiz() {
+    if (closeQuiz) return;
+    exitFull();
+    audio?.unlock();
+    preview.stop(); // only one monitor beeping at a time
+    closeQuiz = startQuiz({
+      audio,
+      beep: draft.sound.beep,
+      onClose: () => {
+        closeQuiz = null;
+        preview.start();
+        renderQuizStats();
+      },
+    });
+  }
+
+  if (solo) {
+    preview.el.extra.innerHTML = `<button type="button" class="mon-btn" data-act="unfull" title="Exit full screen">${icon('close')}<span>Exit full screen</span></button>`;
+    preview.el.extra.querySelector('[data-act="unfull"]').addEventListener('click', exitFull);
+    document.addEventListener('fullscreenchange', onFsChange);
+    document.addEventListener('webkitfullscreenchange', onFsChange);
+    document.addEventListener('keydown', onKeyFull);
+    root.addEventListener('pointerdown', () => audio?.unlock());
+    renderQuizStats();
+  }
+
   renderAll();
 
   return () => {
     clearInterval(connTimer);
-    clearInterval(pingTimer);
+    if (pingTimer) clearInterval(pingTimer);
     clearTimeout(commitTimer);
-    link.close();
+    closeQuiz?.();
+    exitFull();
+    document.removeEventListener('fullscreenchange', onFsChange);
+    document.removeEventListener('webkitfullscreenchange', onFsChange);
+    document.removeEventListener('keydown', onKeyFull);
+    link?.close();
     preview.destroy();
   };
 }

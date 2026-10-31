@@ -56,7 +56,35 @@ const PATHS = {
   ecg: '<path d="M2 12h4l2-5 4 10 2-5h8"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   cuff: '<circle cx="12" cy="13" r="7"/><path d="M12 13l3-3M12 3v3"/>',
+  cards: '<rect x="3" y="7" width="13" height="14" rx="2"/><path d="M8 3h11a2 2 0 0 1 2 2v12"/>',
+  solo: '<circle cx="12" cy="7.5" r="3.5"/><path d="M5 21v-1.5A5.5 5.5 0 0 1 10.5 14h3a5.5 5.5 0 0 1 5.5 5.5V21"/>',
 };
 
 export const icon = (name, cls = '') =>
   `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PATHS[name] || ''}</svg>`;
+
+// Fullscreen helpers (iPhone Safari has no element fullscreen; callers also use a CSS fallback).
+export const fullscreenElement = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+
+export function requestFullscreen(el) {
+  const fn = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (!fn) return;
+  try {
+    const p = fn.call(el);
+    if (p && p.catch) p.catch(() => {});
+  } catch {
+    /* not allowed */
+  }
+}
+
+export function exitFullscreen() {
+  const d = document;
+  if (!fullscreenElement()) return;
+  const fn = d.exitFullscreen || d.webkitExitFullscreen;
+  try {
+    const p = fn?.call(d);
+    if (p && p.catch) p.catch(() => {});
+  } catch {
+    /* ignore */
+  }
+}

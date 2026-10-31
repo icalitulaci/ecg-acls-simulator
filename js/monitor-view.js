@@ -6,6 +6,7 @@ import { NUM_KEYS } from './state.js';
 
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 const SAMPLE_DT = 1 / 500;
+const BUF_N = 6000; // 12 s of samples per trace, used to redraw after a resize
 
 const TEMPLATE = `
   <div class="mon-top">
@@ -61,6 +62,9 @@ class Sweep {
     this.w = 0;
     this.h = 0;
     this.t = null;
+    this.buf = new Float32Array(BUF_N);
+    this.bufLen = 0;
+    this.bufPos = 0;
     this.reset();
   }
 
@@ -68,6 +72,49 @@ class Sweep {
     this.abs = 0;
     this.clearAbs = 0;
     this.py = null;
+  }
+
+  push(v) {
+    this.buf[this.bufPos] = v;
+    this.bufPos = (this.bufPos + 1) % BUF_N;
+    if (this.bufLen < BUF_N) this.bufLen++;
+  }
+
+  // Forget everything (new patient).
+  clear() {
+    this.bufLen = 0;
+    this.bufPos = 0;
+    this.t = null;
+    if (this.w) this.ctx.clearRect(0, 0, this.w, this.h);
+    this.reset();
+  }
+
+  // Redraw the most recent history so it ends just before the erase gap, then keep sweeping.
+  redraw() {
+    const W = this.w, H = this.h, ctx = this.ctx;
+    ctx.clearRect(0, 0, W, H);
+    this.reset();
+    if (W < 4 || H < 4 || !this.bufLen) return;
+    const step = SAMPLE_DT * this.pxs;
+    const end = W - this.gap;
+    const n = Math.min(this.bufLen, Math.floor(end / step));
+    ctx.strokeStyle = this.color;
+    ctx.lineWidth = this.lw;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    let y = 0;
+    for (let i = 0; i < n; i++) {
+      const v = this.buf[(this.bufPos - n + i + BUF_N) % BUF_N];
+      const x = end - (n - 1 - i) * step;
+      y = clamp(this.map(v), 0.015, 0.985) * H;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    this.abs = end;
+    this.clearAbs = W;
+    this.py = y;
   }
 
   resize() {
@@ -81,10 +128,9 @@ class Sweep {
     this.c.width = Math.max(1, Math.round(w * dpr));
     this.c.height = Math.max(1, Math.round(h * dpr));
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.ctx.clearRect(0, 0, w, h);
-    const secs = clamp(w / 125, 3, 8); // ≈ 25 mm/s on typical screens
-    this.pxs = w / secs;
-    this.reset();
+    this.secs = clamp(w / 125, 3, 8); // ≈ 25 mm/s on typical screens
+    this.pxs = w / this.secs;
+    this.redraw();
   }
 
   clearRange(a, b) {
@@ -102,13 +148,13 @@ class Sweep {
     }
   }
 
-  advance(from, to) {
+  advance(from, to, draw = true) {
     if (this.t == null || this.t < from) this.t = from;
     const n = Math.floor((to - this.t) / SAMPLE_DT);
     if (n <= 0) return;
     const W = this.w, H = this.h;
-    if (W < 4 || H < 4) {
-      for (let i = 0; i < n; i++) this.sample((this.t += SAMPLE_DT));
+    if (!draw || W < 4 || H < 4) {
+      for (let i = 0; i < n; i++) this.push(this.sample((this.t += SAMPLE_DT)));
       return;
     }
     const ctx = this.ctx;
@@ -127,7 +173,9 @@ class Sweep {
     if (this.py != null) ctx.moveTo(x, this.py);
     for (let i = 0; i < n; i++) {
       this.t += SAMPLE_DT;
-      const y = clamp(this.map(this.sample(this.t)), 0.015, 0.985) * H;
+      const v = this.sample(this.t);
+      this.push(v);
+      const y = clamp(this.map(v), 0.015, 0.985) * H;
       this.abs += step;
       const nx = this.abs % W;
       if (this.py == null || nx < x) ctx.moveTo(nx, y);
@@ -219,6 +267,39 @@ export class MonitorView {
     for (const w of this.waves) w.resize();
   }
 
+  // Switch between the compact preview layout and the full monitor layout.
+  setCompact(on) {
+    this.compact = on;
+    this.root.classList.toggle('compact', on);
+    for (const w of this.waves) w.lw = on ? 1.6 : 2.2;
+    this.resize();
+  }
+
+  // Start over with a new patient: clear the traces and pre-fill a full screen of history
+  // so the rhythm is readable immediately (used by the quiz).
+  reset(s) {
+    this.stop();
+    this.sig = new PatientSignal();
+    this.state = null;
+    this.tr = {};
+    this.cuff = null;
+    this.alarmIdx = 0;
+    this.lastAlarmTop = 0;
+    for (const w of this.waves) w.clear();
+    this.resize();
+    const now = performance.now() / 1000;
+    const span = Math.max(3, ...this.waves.map((w) => w.secs || 0));
+    const t0 = now - span;
+    this.applyState(s, t0);
+    for (let t = t0; t < now; t += 0.1) {
+      const t2 = Math.min(now, t + 0.1);
+      for (const w of this.waves) w.advance(t, t2, false);
+    }
+    for (const w of this.waves) w.redraw();
+    this.sig.takeBeats(now - 1);
+    this.lastT = now;
+  }
+
   start() {
     if (this.running || !this.state) return;
     this.running = true;
@@ -238,8 +319,8 @@ export class MonitorView {
   }
 
   // Apply a new state from the controller.
-  applyState(s) {
-    const now = performance.now() / 1000;
+  applyState(s, at = performance.now() / 1000) {
+    const now = at;
     const prev = this.state;
     const first = !prev;
     const rhythmChanged = first || prev.rhythm !== s.rhythm;
@@ -272,7 +353,7 @@ export class MonitorView {
     if (!s.alarms) this.alarmList = [];
     this.updateMessages();
     this.refreshNumbers();
-    this.evaluateAlarms(now, true);
+    this.evaluateAlarms(performance.now() / 1000, true);
     if (first) this.start();
   }
 

@@ -30,6 +30,26 @@ Tips
 - A second screen can mirror the same session: on the pairing screen choose
   **Join an existing code**.
 
+## Solo practice and rhythm quiz
+
+Tap **Solo practice** on the start screen to use the monitor and all the controls on one
+device, without pairing. There is no rhythm name under the monitor, so you can practise reading
+it, and **Full screen** shows just the monitor.
+
+**Quiz** opens a full-screen monitor showing a random rhythm with realistic vitals and no
+labels (alarm banners are off so they don't give the answer away). Tap **Show answer** to see
+the rhythm name, its key ECG features and a short ACLS note. Then rate yourself:
+
+| Again | Hard | Good | Easy |
+|---|---|---|---|
+| missed it, see it again in 1 min | got it with effort | got it | instant |
+
+Scheduling works like Anki. New cards go through short learning steps (1 min, 10 min), then
+come back after 1 day, 3 days, 8 days… Cards you miss come back sooner. Progress is saved in
+the browser on that device; **Reset progress** clears it. The deck has 20 cards: the 18
+rhythms plus sinus rhythm with PVCs and ventricular bigeminy. On a keyboard, Space reveals the
+answer and 1–4 rate it.
+
 ## Features (v1: rhythms and vitals)
 
 **Rhythms (lead II):** normal sinus, sinus brady, sinus tach, SVT, A-fib, A-flutter (with the
@@ -87,7 +107,8 @@ index.html            single page; routes ?monitor and ?join=CODE
 css/style.css
 js/app.js             home screen + routing
 js/monitor-page.js    pairing screen, sound, full screen, wake lock
-js/host-page.js       controller UI
+js/host-page.js       controller UI (also used for solo practice)
+js/quiz.js            rhythm quiz: card deck, spaced-repetition scheduling, quiz screen
 js/monitor-view.js    monitor renderer (canvas sweeps, numerics, alarms)
 js/signal.js          ECG / pleth / capnography waveform synthesis
 js/link.js            pairing transport (minimal MQTT-over-WebSocket client)
