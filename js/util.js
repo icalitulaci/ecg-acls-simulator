@@ -10,6 +10,24 @@ export function load(key) {
   }
 }
 
+// sessionStorage: survives a refresh of this tab, but a new visit starts fresh.
+export function sload(key) {
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+export function sstore(key, value) {
+  try {
+    if (value == null) sessionStorage.removeItem(key);
+    else sessionStorage.setItem(key, value);
+  } catch {
+    /* private mode etc. */
+  }
+}
+
 export function store(key, value) {
   try {
     if (value == null) localStorage.removeItem(key);

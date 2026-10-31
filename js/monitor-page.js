@@ -4,9 +4,17 @@ import { Link, randomId } from './link.js';
 import { MonitorView } from './monitor-view.js';
 import { sanitize } from './state.js';
 import { qrSvg } from './qr.js';
-import { fmtCode, load, store, controllerUrl, icon } from './util.js';
+import { fmtCode, sload, sstore, controllerUrl, icon } from './util.js';
 
+// Kept in sessionStorage: a refresh keeps the same code (the controller stays paired), but
+// opening the monitor again starts a new session with a new code.
 const CODE_KEY = 'acls-monsim.monitor-code';
+const ID_KEY = 'acls-monsim.monitor-id';
+const SEEN_FOR = 8000; // ms a controller counts as connected after we last heard from it
+
+export function forgetMonitorCode() {
+  sstore(CODE_KEY, null);
+}
 
 function newCode() {
   const a = new Uint32Array(1);
@@ -67,22 +75,27 @@ export function startMonitor(root, { audio, onExit }) {
   const fsSupported = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
   if (!fsSupported) btnFs.hidden = true;
 
-  const monId = randomId(8);
-  let code = load(CODE_KEY);
+  const monId = sload(ID_KEY) || randomId(8);
+  sstore(ID_KEY, monId);
+  let code = sload(CODE_KEY);
   let link = null;
   let applied = null;
   let appliedRev = 0;
   let startedAt = Date.now();
+  let lastHost = 0;
+  let lastBeat = 0;
 
   function connect(c, clear) {
     link?.close();
     code = c;
-    store(CODE_KEY, c);
+    sstore(CODE_KEY, c);
     applied = null;
     appliedRev = 0;
+    lastHost = 0;
     startedAt = Date.now();
-    link = new Link(c, { onMessage, onStatus: renderStatus });
+    link = new Link(c, { onMessage, onStatus: renderStatus, onConnect: () => heartbeat(true) });
     link.subscribe('state');
+    link.subscribe('host');
     // A brand-new code: wipe any stale retained state another session may have left.
     if (clear) link.publish('state', null, true);
     btnCode.textContent = `#${c}`;
@@ -95,6 +108,15 @@ export function startMonitor(root, { audio, onExit }) {
   }
 
   function onMessage(kind, data) {
+    if (kind === 'host') {
+      // The controller pings every few seconds; answer straight away. This runs on network
+      // events, so it keeps working even when the browser throttles timers in a background tab.
+      const fresh = Date.now() - lastHost > SEEN_FOR;
+      lastHost = Date.now();
+      heartbeat();
+      if (fresh) renderStatus();
+      return;
+    }
     if (kind !== 'state') return;
     const s = sanitize(data);
     if (!s || s.rev <= appliedRev) return;
@@ -102,36 +124,44 @@ export function startMonitor(root, { audio, onExit }) {
     applied = s;
     view.applyState(s);
     showPair(false);
-    heartbeat();
+    heartbeat(true);
   }
 
   // Lets the controller know we're here and which state we're showing.
-  function heartbeat() {
+  function heartbeat(force = false) {
+    const now = Date.now();
+    if (!force && now - lastBeat < 400) return;
+    lastBeat = now;
     link?.publish('mon', { id: monId, rev: appliedRev, state: applied });
   }
-  const hbTimer = setInterval(heartbeat, 3000);
+  const hbTimer = setInterval(() => heartbeat(true), 3000);
 
   function renderStatus() {
     if (!link) return;
     const { up } = link.status();
     const st = root.querySelector('.pair-status');
     const txt = st.querySelector('.txt');
-    let cls, msg;
-    if (up > 0) {
-      cls = 'ok';
-      msg = 'Online, waiting for the controller…';
+    const hostHere = Date.now() - lastHost < SEEN_FOR;
+    let cls, msg, dot;
+    if (hostHere) {
+      [cls, dot] = ['ok', 'ok'];
+      msg = 'Controller connected ✓';
+    } else if (up > 0) {
+      [cls, dot] = ['ok', 'wait'];
+      msg = `Online (${up} relay${up === 1 ? '' : 's'}), waiting for the controller…`;
     } else if (Date.now() - startedAt < 7000) {
-      cls = 'wait';
+      [cls, dot] = ['wait', 'wait'];
       msg = 'Connecting to relay…';
     } else {
-      cls = 'bad';
+      [cls, dot] = ['bad', 'bad'];
       msg = "Can't reach the relay servers. Check this device's internet connection.";
     }
     st.className = `pair-status ${cls}`;
     txt.textContent = msg;
-    linkDot.className = `mon-link ${cls}`;
+    linkDot.className = `mon-link ${dot}`;
+    linkDot.title = hostHere ? 'Controller connected' : up > 0 ? 'Online, no controller connected' : 'Offline';
   }
-  const statusTimer = setInterval(renderStatus, 2000);
+  const statusTimer = setInterval(renderStatus, 1000);
 
   function showPair(on) {
     pair.hidden = !on;

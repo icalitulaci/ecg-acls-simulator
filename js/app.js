@@ -2,7 +2,7 @@
 //   ?monitor        → this device is the patient monitor
 //   ?join=123456    → this device is the controller for that code (?join alone asks for it)
 import { MonitorAudio } from './audio.js';
-import { startMonitor } from './monitor-page.js';
+import { startMonitor, forgetMonitorCode } from './monitor-page.js';
 import { startHost, renderConnect } from './host-page.js';
 import { icon } from './util.js';
 
@@ -61,6 +61,7 @@ function renderHome() {
     </main>`;
   root.querySelector('[data-role="monitor"]').addEventListener('click', () => {
     audio.unlock(); // this tap counts as the gesture browsers need for sound
+    forgetMonitorCode(); // a new monitor session gets a new code
     navigate({ monitor: '' });
   });
   root.querySelector('[data-role="host"]').addEventListener('click', () => navigate({ join: '' }));

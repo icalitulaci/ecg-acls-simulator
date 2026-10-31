@@ -5,26 +5,12 @@ import { RHYTHMS, RHYTHM_MAP, GROUPS, ECTOPY, defaultPulse } from './rhythms.js'
 import { defaultState, sanitize, cloneState, diffCount, PRESETS, applyPreset, TRENDS, NUM_KEYS } from './state.js';
 import { fmtCode, load, store, icon } from './util.js';
 
-const RECENT_KEY = 'acls-monsim.recent-codes';
 const AUTOSEND_KEY = 'acls-monsim.autosend';
 
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const HR_RANGE = [20, 300]; // the HR slider covers this for every rhythm
 const SINUS = { sbrady: 'sinus bradycardia', nsr: 'normal sinus rhythm', stach: 'sinus tachycardia' };
 const sinusName = (hr) => (hr < 60 ? 'sinus bradycardia' : hr > 100 ? 'sinus tachycardia' : 'normal sinus rhythm');
-
-function recentCodes() {
-  try {
-    const a = JSON.parse(load(RECENT_KEY) || '[]');
-    return Array.isArray(a) ? a.filter((c) => /^\d{6}$/.test(c)).slice(0, 3) : [];
-  } catch {
-    return [];
-  }
-}
-
-function rememberCode(code) {
-  store(RECENT_KEY, JSON.stringify([code, ...recentCodes().filter((c) => c !== code)].slice(0, 3)));
-}
 
 // ---------------------------------------------------------------- connect screen
 
@@ -41,7 +27,6 @@ export function renderConnect(root, { onConnect, onBack }) {
           <button class="btn primary big" type="submit">Connect</button>
         </form>
         <p class="form-error" hidden>Codes are 6 digits.</p>
-        <div class="recent" hidden><span class="muted">Recent</span><div class="recent-list"></div></div>
       </div>
     </main>`;
   const input = root.querySelector('.code-input');
@@ -65,20 +50,6 @@ export function renderConnect(root, { onConnect, onBack }) {
     go(input.value.replace(/\D/g, ''));
   });
   root.querySelector('.back').addEventListener('click', onBack);
-  const recent = recentCodes();
-  if (recent.length) {
-    const box = root.querySelector('.recent');
-    box.hidden = false;
-    const list = box.querySelector('.recent-list');
-    for (const c of recent) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'chip';
-      b.textContent = fmtCode(c);
-      b.addEventListener('click', () => onConnect(c));
-      list.append(b);
-    }
-  }
   setTimeout(() => input.focus(), 50);
 }
 
@@ -132,6 +103,7 @@ const HOST_TEMPLATE = `
         <div class="conn-line conn-mon"><span class="dot"></span><span class="txt">Waiting for monitor…</span></div>
       </div>
     </header>
+    <div class="conn-hint" role="status" hidden></div>
     <div class="host-grid">
       <div class="col">
         <section class="card preview-card">
@@ -183,7 +155,6 @@ const HOST_TEMPLATE = `
   </div>`;
 
 export function startHost(root, code, { onExit }) {
-  rememberCode(code);
   root.innerHTML = HOST_TEMPLATE;
   const $ = (s) => root.querySelector(s);
   const $$ = (s) => [...root.querySelectorAll(s)];
@@ -202,9 +173,11 @@ export function startHost(root, code, { onExit }) {
   const preview = new MonitorView($('.preview'), { compact: true });
   preview.applyState(cloneState(live));
 
-  const link = new Link(code, { onMessage, onStatus: renderConn });
+  const link = new Link(code, { onMessage, onStatus: renderConn, onConnect: () => ping() });
   link.subscribe('state');
   link.subscribe('mon');
+  const ping = () => link.publish('host', { id: link.id, rev: live.rev });
+  const pingTimer = setInterval(ping, 3000);
 
   // ---- sync logic
 
@@ -549,7 +522,7 @@ export function startHost(root, code, { onExit }) {
     const relay = $('.conn-line.conn-relay');
     const now = Date.now();
     let cls, txt;
-    if (up > 0) [cls, txt] = ['ok', 'Online'];
+    if (up > 0) [cls, txt] = ['ok', `Online (${up} relay${up === 1 ? '' : 's'})`];
     else if (now - connectedAt < 7000) [cls, txt] = ['wait', 'Connecting…'];
     else [cls, txt] = ['bad', 'Offline: check internet'];
     relay.className = `conn-line conn-relay ${cls}`;
@@ -565,6 +538,17 @@ export function startHost(root, code, { onExit }) {
     }
     mon.className = `conn-line conn-mon ${cls}`;
     mon.querySelector('.txt').textContent = txt;
+
+    // After a while with nobody answering, explain what to check.
+    const hint = $('.conn-hint');
+    let msg = '';
+    if (!active.length && now - connectedAt > 10000) {
+      msg = up > 0
+        ? `No monitor is answering on code ${fmtCode(code)}. Check this matches the code on the monitor screen (it gets a new code each time Monitor is opened). If it does, the two devices may be on networks that block different relay servers: try putting both on the same Wi-Fi or a phone hotspot.`
+        : "This phone can't reach the relay servers. Check its internet connection, or switch between Wi-Fi and mobile data.";
+    }
+    hint.hidden = !msg;
+    if (hint.textContent !== msg) hint.textContent = msg;
 
     const tag = $('.trend-tag');
     const left = Math.ceil((trendEnd - now) / 1000);
@@ -585,6 +569,7 @@ export function startHost(root, code, { onExit }) {
 
   return () => {
     clearInterval(connTimer);
+    clearInterval(pingTimer);
     clearTimeout(commitTimer);
     link.close();
     preview.destroy();

@@ -9,6 +9,7 @@
 // Override the relays with ?relay=wss://host:port/path (repeatable), e.g. for a self-hosted broker.
 
 const DEFAULT_RELAYS = [
+  'wss://mqtt.eclipseprojects.io:443/mqtt', // port 443: gets through networks that block other ports
   'wss://broker.hivemq.com:8884/mqtt',
   'wss://broker.emqx.io:8084/mqtt',
   'wss://test.mosquitto.org:8081/mqtt',
@@ -16,7 +17,10 @@ const DEFAULT_RELAYS = [
 
 const APP = 'acls-monsim';
 const PREFIX = 'acls-monsim/v1/';
-const KEEPALIVE = 30; // seconds
+const KEEPALIVE = 30; // seconds (what the broker is told)
+const PING_EVERY = 10000; // ms between our pings
+const DEAD_AFTER = 25000; // ms without any packet → connection is dead
+const CONNECT_TIMEOUT = 10000; // ms to get from "connecting" to CONNACK
 
 export function relayList() {
   const custom = new URLSearchParams(location.search).getAll('relay').filter((u) => /^wss?:\/\//i.test(u));
@@ -83,7 +87,7 @@ class MqttSocket {
     if (this.closed) return;
     let ws;
     try {
-      ws = new WebSocket(this.url, ['mqtt']);
+      ws = new WebSocket(this.url, ['mqtt', 'mqttv3.1']);
     } catch {
       this.scheduleReconnect();
       return;
@@ -91,6 +95,10 @@ class MqttSocket {
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
     this.buf = new Uint8Array(0);
+    clearTimeout(this.connectTimer);
+    this.connectTimer = setTimeout(() => {
+      if (this.ws === ws && !this.up) this.drop(false); // stuck connecting: give up and retry
+    }, CONNECT_TIMEOUT);
     ws.onopen = () => {
       // CONNECT, clean session
       const body = [...mqttString('MQTT'), 4, 0x02, ...u16(KEEPALIVE), ...mqttString(this.clientId)];
@@ -141,15 +149,17 @@ class MqttSocket {
       this.up = true;
       this.retry = 0;
       this.lastRx = Date.now();
+      clearTimeout(this.connectTimer);
       for (const t of this.subs) this.sendSubscribe(t);
       for (const [t, p] of this.pending) this.sendPublish(t, p, true);
       this.pending.clear();
       clearInterval(this.pingTimer);
       this.pingTimer = setInterval(() => {
-        if (Date.now() - this.lastRx > KEEPALIVE * 1500) this.ws?.close();
+        if (Date.now() - this.lastRx > DEAD_AFTER) this.drop(true);
         else this.raw(packet(0xc0, []));
-      }, 15000);
+      }, PING_EVERY);
       this.h.status();
+      this.h.connected?.();
     } else if (type === 3) {
       // PUBLISH
       const qos = (first >> 1) & 3;
@@ -167,12 +177,50 @@ class MqttSocket {
 
   lost(ws) {
     if (ws !== this.ws) return;
+    this.drop(false);
+  }
+
+  // Abandon the current socket right away. Closing a dead connection can take the browser
+  // a minute to report, so we don't wait for its close event.
+  drop(immediate) {
+    const ws = this.ws;
+    if (ws) {
+      ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+      try {
+        ws.close();
+      } catch {
+        /* ignore */
+      }
+    }
     this.ws = null;
     const wasUp = this.up;
     this.up = false;
     clearInterval(this.pingTimer);
+    clearTimeout(this.connectTimer);
     if (wasUp) this.h.status();
-    this.scheduleReconnect();
+    if (immediate) {
+      this.retry = 0;
+      clearTimeout(this.reconnectTimer);
+      this.open();
+    } else this.scheduleReconnect();
+  }
+
+  // Called when the page wakes up / comes back online: make sure the connection is really alive.
+  check() {
+    if (this.closed) return;
+    if (!this.up) {
+      if (!this.ws) {
+        this.retry = 0;
+        clearTimeout(this.reconnectTimer);
+        this.open();
+      }
+      return;
+    }
+    const sent = Date.now();
+    this.raw(packet(0xc0, []));
+    setTimeout(() => {
+      if (this.up && this.lastRx < sent) this.drop(true);
+    }, 3000);
   }
 
   scheduleReconnect() {
@@ -207,6 +255,7 @@ class MqttSocket {
   close() {
     this.closed = true;
     clearTimeout(this.reconnectTimer);
+    clearTimeout(this.connectTimer);
     clearInterval(this.pingTimer);
     if (this.up) this.raw(packet(0xe0, []));
     try {
@@ -220,7 +269,7 @@ class MqttSocket {
 }
 
 export class Link {
-  constructor(code, { onMessage = () => {}, onStatus = () => {} } = {}) {
+  constructor(code, { onMessage = () => {}, onStatus = () => {}, onConnect = () => {} } = {}) {
     this.code = code;
     this.base = PREFIX + code + '/';
     this.id = randomId();
@@ -233,8 +282,17 @@ export class Link {
         new MqttSocket(url, {
           message: (topic, payload) => this.receive(topic, payload),
           status: () => this.onStatus(this.status()),
+          connected: () => onConnect(),
         }),
     );
+    // Phones kill connections while the screen is off; re-check as soon as we're back.
+    this.wake = () => {
+      if (document.visibilityState === 'visible') for (const s of this.sockets) s.check();
+    };
+    document.addEventListener('visibilitychange', this.wake);
+    window.addEventListener('online', this.wake);
+    window.addEventListener('pageshow', this.wake);
+    window.addEventListener('focus', this.wake);
     try {
       this.bc = new BroadcastChannel(PREFIX + code);
       this.bc.onmessage = (e) => {
@@ -278,6 +336,10 @@ export class Link {
   }
 
   close() {
+    document.removeEventListener('visibilitychange', this.wake);
+    window.removeEventListener('online', this.wake);
+    window.removeEventListener('pageshow', this.wake);
+    window.removeEventListener('focus', this.wake);
     for (const s of this.sockets) s.close();
     try {
       this.bc?.close();

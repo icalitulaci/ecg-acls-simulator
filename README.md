@@ -20,8 +20,13 @@ Tips
 - Tap the monitor once to enable sound (browsers block audio until you tap). On an iPhone or
   iPad, also turn off silent mode.
 - Use the ⛶ button for full screen. The screen is kept awake while the monitor is open.
-- The monitor keeps its code if it is reloaded, and the controller can reconnect any time
-  without resetting the scenario.
+- Each time **Monitor** is opened it gets a new code. Refreshing the monitor page keeps the
+  same code, and the controller can reconnect any time without resetting the scenario.
+- Both screens show the link status. On the controller the second line reads
+  "Monitor connected ✓". On the monitor the small dot next to the code turns green when
+  the controller is connected (amber means online but no controller).
+- After the screen locks or the tab goes to the background, connections are checked and
+  restored as soon as it wakes up.
 - A second screen can mirror the same session: on the pairing screen choose
   **Join an existing code**.
 
@@ -61,14 +66,16 @@ To publish from another branch instead, change it under **Settings → Pages**.
 ## How pairing works
 
 GitHub Pages can only host static files, so the two devices exchange messages through free
-public MQTT relay servers over secure WebSockets (HiveMQ, EMQX and Mosquitto test brokers). The
-pairing code is the channel name. The app connects to all three relays at once, so one being
-down doesn't break the session. Two tabs in the same browser also pair directly, without
-internet.
+public MQTT relay servers over secure WebSockets (Eclipse, HiveMQ, EMQX and Mosquitto test
+brokers). The pairing code is the channel name. The app connects to all four relays at once,
+so one being down doesn't break the session. The controller pings the monitor every few
+seconds and the monitor answers straight away, so each side knows whether the other is really
+there. Two tabs in the same browser also pair directly, without internet.
 
-- Both devices need internet access, and the network must allow WebSocket connections on
-  ports 8884, 8084 or 8081. Some strict school or hospital Wi-Fi networks block these. If so,
-  use a phone hotspot.
+- Both devices need internet access. The Eclipse relay uses port 443 (the normal HTTPS port),
+  so it gets through most networks. The others use ports 8884, 8084 and 8081, which some
+  strict school or hospital Wi-Fi networks block. If the controller says no monitor is
+  answering, put both devices on the same Wi-Fi or a phone hotspot.
 - The relays are public and unauthenticated. Only simulated vitals are sent; never enter real
   patient data.
 - To use your own broker, add `?relay=wss://your-broker:port/path` to the link on both devices.
