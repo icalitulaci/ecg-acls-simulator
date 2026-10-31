@@ -9,6 +9,9 @@ const RECENT_KEY = 'acls-monsim.recent-codes';
 const AUTOSEND_KEY = 'acls-monsim.autosend';
 
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const HR_RANGE = [20, 300]; // the HR slider covers this for every rhythm
+const SINUS = { sbrady: 'sinus bradycardia', nsr: 'normal sinus rhythm', stach: 'sinus tachycardia' };
+const sinusName = (hr) => (hr < 60 ? 'sinus bradycardia' : hr > 100 ? 'sinus tachycardia' : 'normal sinus rhythm');
 
 function recentCodes() {
   try {
@@ -366,10 +369,7 @@ export function startHost(root, code, { onExit }) {
 
   // Vital sliders and steppers
   function limits(key) {
-    if (key === 'hr') {
-      const R = RHYTHM_MAP[draft.rhythm];
-      return R.hr ? { min: R.hr[0], max: R.hr[1], step: 1 } : { min: 10, max: 300, step: 1 };
-    }
+    if (key === 'hr') return { min: HR_RANGE[0], max: HR_RANGE[1], step: 1 };
     if (key === 'sys' || key === 'dia') return { ...BP[key], step: 1 };
     const r = VITAL_ROWS.find((x) => x.key === key);
     return { min: r.min, max: r.max, step: r.step };
@@ -511,9 +511,13 @@ export function startHost(root, code, { onExit }) {
         disabled = true;
         note = 'No countable rate in this rhythm. The monitor shows ---.';
       } else if (k === 'hr' && draft.rhythm === 'aflutter') {
-        note = `Ventricular rate, conducted ${Math.max(2, Math.round(300 / draft.hr))}:1.`;
+        note = `Ventricular rate, conducted ${clamp(Math.round(300 / draft.hr), 1, 8)}:1.`;
       } else if (k === 'hr' && (draft.rhythm === 'avb3' || draft.rhythm === 'avb2i' || draft.rhythm === 'avb2ii')) {
         note = 'Ventricular rate. P waves run faster.';
+      } else if (k === 'hr' && SINUS[draft.rhythm] && sinusName(draft.hr) !== SINUS[draft.rhythm]) {
+        note = `At ${draft.hr} bpm this reads as ${sinusName(draft.hr)}.`;
+      } else if (k === 'hr' && R.hr && (draft.hr < R.hr[0] || draft.hr > R.hr[1])) {
+        note = `Outside the usual ${R.hr[0]}–${R.hr[1]} bpm for ${R.short}.`;
       }
       if ((k === 'spo2' || k === 'bp') && !draft.pulse) note = 'No pulse: the monitor shows --- for this.';
       row.classList.toggle('disabled', disabled);

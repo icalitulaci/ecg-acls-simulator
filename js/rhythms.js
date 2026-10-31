@@ -8,7 +8,8 @@ export const GROUPS = [
   { id: 'arrest', name: 'Cardiac arrest' },
 ];
 
-// hr: [min, max] for the HR control (null = no countable rate), def: HR used when switching to it.
+// hr: [min, max] typical rate (null = no countable rate). The HR control isn't limited to it;
+//     switching to the rhythm resets HR to def only if the current HR is outside it.
 // pulse: default pulse state. locked: pulse can't be turned on (VF / asystole / PEA).
 // ectopy: PVCs can be added on top of this rhythm.
 export const RHYTHMS = [

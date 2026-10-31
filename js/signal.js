@@ -182,10 +182,10 @@ export class PatientSignal {
     this.skipNext = false;
   }
 
+  // PR shortens a little as the rate rises (0.18 s at 40 bpm → 0.12 s at 150+).
   prInterval() {
-    if (this.rhythm === 'avb1') return 0.30;
-    if (this.rhythm === 'stach') return 0.13;
-    return 0.16;
+    const shorten = clamp(((this.v.hr || 75) - 75) * 0.0006, -0.02, 0.04);
+    return (this.rhythm === 'avb1' ? 0.30 : 0.16) - shorten;
   }
 
   ensure(t) {
@@ -313,7 +313,7 @@ export class PatientSignal {
 
   stepFlutter() {
     const hr = clamp(this.v.hr, 30, 320);
-    const n = clamp(Math.round(300 / hr), 2, 8); // conduction ratio, keeps atrial rate ≈ 300
+    const n = clamp(Math.round(300 / hr), 1, 8); // conduction ratio, keeps atrial rate ≈ 300
     const T = 60 / (hr * n);
     const t = this.cursor;
     this.ev.push({ t, ...fWave(T) });
